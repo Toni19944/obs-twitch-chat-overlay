@@ -16,4 +16,8 @@ Simple HTML you can load as a browser source. Connects anonymously via Twitch IR
 - Add the html file as a browser source in OBS.
 - profit???
 
-I'm using 400x700 size on a 1080p stream (just a point of reference you know...). No need to change any other settings if you don't want to. I have shutdown and refresh boxes ticked, custom CSS and permissions are just default.
+I'm using 400x700 size on a 1080p stream (just a point of reference you know...). No need to change any other settings if you don't want to. I have shutdown and refresh boxes ticked. Custom CSS and permissions are just default.
+
+---
+
+![demo](chat-overlay-demo.gif)
