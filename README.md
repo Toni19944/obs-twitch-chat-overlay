@@ -1,16 +1,18 @@
 # obs-twitch-chat-overlay
 Simple HTML you can load as a browser source. Connects anonymously via Twitch IRC. Does not require log in or API keys or anything.  
+---
+- Displays username colors and twitch default chat badges.  
+- Also supports emotes yippeee! (twitch emotes and channel emotes only. No 7tv etc. support for now. sorry...)  
+- Should display correct colors that users have set and only use random color if an user has never set a custom color on twitch.  
 
-Displays username colors and twitch default chat badges.  
-Should display correct colors that users have set and only use random color if an user has never set a custom color on twitch.
-
+---
 ### Setup/installation
 - Download or copy paste the chat-overlay.html
-- CHANGE YOUR CHANNEL NAME (around the line 128 where the "config" part is")
+- CHANGE YOUR CHANNEL NAME (around the line 142 where the "config" part is")
   - additionally you can change the max messages amount and fade out timer.  
     - default max messages: ```25```. Fade out: ```30s```
   - if you don't want messages to fade out:  
-    - comment out the ```scheduleFade(div);``` lines with ```//``` - these are on lines 304 and 313
+    - comment out the ```scheduleFade(div);``` lines with ```//``` - these are on lines 383 and 392
 - Add the html file as a browser source in OBS.
 - profit???
 
