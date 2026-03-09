@@ -63,7 +63,7 @@ html, body {
   gap: 3px;
   flex-shrink: 0;
   position: relative;
-  top: 2px; /* nudge down to sit on text baseline */
+  top: 2px;
 }
 
 .badge-img {
@@ -72,7 +72,6 @@ html, body {
   display: block;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
 }
-/* hide broken badges cleanly */
 .badge-img[data-broken="1"] { display: none; }
 
 .username {
@@ -90,13 +89,28 @@ html, body {
   text-shadow: 0 1px 3px rgba(0,0,0,1);
 }
 
-.text {
+/* Message body — inline mix of text and emote images */
+.body {
+  display: inline;
   color: #f0f0f0;
   text-shadow:
     0 0 5px rgba(0,0,0,0.95),
     0 1px 4px rgba(0,0,0,1),
     1px 1px 0 rgba(0,0,0,0.85);
 }
+
+.emote-img {
+  /* Sit inline with text, vertically centered */
+  display: inline-block;
+  width: auto;
+  height: 22px;
+  vertical-align: middle;
+  margin: 0 1px;
+  position: relative;
+  top: -1px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
+.emote-img[data-broken="1"] { display: none; }
 
 .sysmsg {
   font-size: 12px;
@@ -127,57 +141,119 @@ html, body {
 // ─── CONFIG ──────────────────────────────────────
 var CHANNEL    = 'CHANNEL NAME';
 var MAX_MSGS   = 25;
-var FADE_AFTER = 30000; // milliseconds
+var FADE_AFTER = 30000; // ms — set to 999999999 to effectively disable
 // ─────────────────────────────────────────────────
 
-// ── Hardcoded badge image URLs ────────────────────────────────────────────
-// <img> tags load cross-origin freely — no XHR/CORS involved at all.
-// Format: https://static-cdn.jtvnw.net/badges/v1/{badge-uuid}/{scale}
-//   scale 1 = 18px, 2 = 36px, 3 = 72px
-//
-// For subscriber badges: Twitch sends e.g. "subscriber/3006" where the
-// version encodes the sub tier + months. We map the version prefix to a
-// tier image, and fall back to the generic sub badge.
-var CDN = 'https://static-cdn.jtvnw.net/badges/v1/';
-
-var BADGE_URLS = {
-  // Standard global badges
-  'broadcaster':  CDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
-  'moderator':    CDN + '3267646d-33f0-4b17-b3df-f923a41db1d0/2',
-  'vip':          CDN + 'b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
-  'subscriber':   CDN + '5d9f2208-5dd8-11e7-8513-2ff4adfae661/2', // generic sub
-  'premium':      CDN + 'bbbe0db0-a598-423e-86d0-f9fb98ca1933/2', // Prime Gaming
-  'turbo':        CDN + 'bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
-  'partner':      CDN + 'd12a2e27-16f6-41d0-ab77-b780518f00a3/2',
-  'staff':        CDN + 'd97c37be-e797-4a18-a3ae-31d92135e8a0/2',
-  'admin':        CDN + '9ef7e029-4cdf-4d4d-a0d5-e2b3fb2583fe/2',
-  'global_mod':   CDN + '9384c428-3380-48c4-820d-0e1f4d500071/2',
-  'no_audio':     CDN + 'aef2cd08-f29b-45a1-8c12-d9bff2667d9f/2',
-  'no_video':     CDN + '199a0dba-8d77-45b5-b56e-a5b8c29f2462/2',
-  // Bits / Cheermotes (most common milestones)
-  'bits':         CDN + '73b5c3fb-24f9-4a82-a852-2f475ad29d43/2',
-  'bits-100':     CDN + '09d93036-e7ce-431c-9a9e-7044297133f2/2',
-  'bits-1000':    CDN + '0d85a29e-79ad-4c63-a285-3acd2c66f2ba/2',
-  'bits-5000':    CDN + '57de6f11-a20b-4e56-bd5e-b6dd2d9a7efe/2',
-  'bits-10000':   CDN + 'c55f9f22-0e5c-41ce-bf07-19a7fef23f78/2',
-  'bits-25000':   CDN + '64e1aec7-7c77-4dae-9bc2-e7a02c7b2dff/2',
-  'bits-100000':  CDN + 'ba2bfc4b-105d-4ca9-9c72-7d926d63a17e/2',
-};
-
-function getBadgeUrl(setName /*, version */) {
-  // For subscriber, just show generic sub icon regardless of tier/months
-  // (channel-specific sub art would need the Helix API + a Client-ID)
-  if (setName === 'subscriber') return BADGE_URLS['subscriber'];
-  // For bits, try to find a tier match, fallback to generic
-  if (setName === 'bits') return BADGE_URLS['bits'];
-  return BADGE_URLS[setName] || null;
-}
-
-// ── IRC connection ────────────────────────────────────────────────────────
 var feed = document.getElementById('feed');
 var ws   = null;
 var retryTimer = null;
 
+// ── Badge CDN URLs ────────────────────────────────────────────────────────
+var CDN = 'https://static-cdn.jtvnw.net/badges/v1/';
+var BADGE_URLS = {
+  'broadcaster': CDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
+  'moderator':   CDN + '3267646d-33f0-4b17-b3df-f923a41db1d0/2',
+  'vip':         CDN + 'b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
+  'subscriber':  CDN + '5d9f2208-5dd8-11e7-8513-2ff4adfae661/2',
+  'premium':     CDN + 'bbbe0db0-a598-423e-86d0-f9fb98ca1933/2',
+  'turbo':       CDN + 'bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
+  'partner':     CDN + 'd12a2e27-16f6-41d0-ab77-b780518f00a3/2',
+  'staff':       CDN + 'd97c37be-e797-4a18-a3ae-31d92135e8a0/2',
+  'admin':       CDN + '9ef7e029-4cdf-4d4d-a0d5-e2b3fb2583fe/2',
+  'global_mod':  CDN + '9384c428-3380-48c4-820d-0e1f4d500071/2',
+  'bits':        CDN + '73b5c3fb-24f9-4a82-a852-2f475ad29d43/2',
+};
+
+function getBadgeUrl(setName) {
+  return BADGE_URLS[setName] || null;
+}
+
+// ── Emote CDN URL ─────────────────────────────────────────────────────────
+function getEmoteUrl(emoteId) {
+  // Works for all Twitch emotes: global, sub, bits, follower — anything native.
+  return 'https://static-cdn.jtvnw.net/emoticons/v2/' + emoteId + '/default/dark/2.0';
+}
+
+// ── Parse emotes tag into a sorted map of ranges → emote id ──────────────
+// emotes tag format: "id:start-end,start-end/id:start-end/..."
+// Positions are byte offsets into the raw UTF-8 message text.
+function parseEmotes(emoteTag) {
+  // Returns array of {id, start, end} sorted by start position
+  if (!emoteTag) return [];
+  var result = [];
+  var groups = emoteTag.split('/');
+  for (var i = 0; i < groups.length; i++) {
+    if (!groups[i]) continue;
+    var colon = groups[i].indexOf(':');
+    if (colon < 0) continue;
+    var id = groups[i].slice(0, colon);
+    var ranges = groups[i].slice(colon + 1).split(',');
+    for (var j = 0; j < ranges.length; j++) {
+      var dash = ranges[j].indexOf('-');
+      if (dash < 0) continue;
+      result.push({
+        id:    id,
+        start: parseInt(ranges[j].slice(0, dash), 10),
+        end:   parseInt(ranges[j].slice(dash + 1), 10) // inclusive
+      });
+    }
+  }
+  result.sort(function(a, b) { return a.start - b.start; });
+  return result;
+}
+
+// ── Build message body (text + emote images) ──────────────────────────────
+// Twitch emote positions are codepoint indices into the message string.
+function buildBody(text, emoteTag) {
+  var frag = document.createDocumentFragment();
+  var emotes = parseEmotes(emoteTag);
+
+  if (!emotes.length) {
+    // No emotes — plain text node
+    frag.appendChild(document.createTextNode(text));
+    return frag;
+  }
+
+  // Convert string to array of codepoints so we index correctly
+  // (handles emoji / surrogate pairs in chat text)
+  var chars = [];
+  for (var i = 0; i < text.length; ) {
+    var code = text.codePointAt(i);
+    chars.push(text.charAt(i));
+    // surrogate pair takes 2 JS chars
+    i += (code > 0xFFFF) ? 2 : 1;
+  }
+
+  var cursor = 0;
+  for (var e = 0; e < emotes.length; e++) {
+    var em = emotes[e];
+    // Text before this emote
+    if (em.start > cursor) {
+      var beforeText = chars.slice(cursor, em.start).join('');
+      if (beforeText) frag.appendChild(document.createTextNode(beforeText));
+    }
+    // Emote image
+    var img = document.createElement('img');
+    img.className = 'emote-img';
+    img.src   = getEmoteUrl(em.id);
+    img.alt   = chars.slice(em.start, em.end + 1).join(''); // e.g. "PogChamp"
+    img.title = img.alt;
+    img.onerror = function() { this.setAttribute('data-broken', '1'); };
+    frag.appendChild(img);
+
+    cursor = em.end + 1;
+  }
+
+  // Any remaining text after the last emote
+  if (cursor < chars.length) {
+    var afterText = chars.slice(cursor).join('');
+    if (afterText) frag.appendChild(document.createTextNode(afterText));
+  }
+
+  return frag;
+}
+
+// ── IRC connection ────────────────────────────────────────────────────────
 function connect() {
   if (ws) {
     ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
@@ -233,10 +309,11 @@ function onLine(line) {
     var ci   = line.indexOf(':', line.indexOf('PRIVMSG'));
     var text = ci > -1 ? line.slice(ci + 1) : '';
     addMsg({
-      display: tags['display-name'] || nick,
-      color:   tags['color']        || autoColor(nick),
-      badges:  tags['badges']       || '',
-      text:    text
+      display:  tags['display-name'] || nick,
+      color:    tags['color']        || autoColor(nick),
+      badges:   tags['badges']       || '',
+      emotes:   tags['emotes']       || '',
+      text:     text
     });
   }
 
@@ -267,37 +344,39 @@ function addMsg(m) {
     wrap.className = 'badges';
     var added = 0;
     for (var i = 0; i < badgePairs.length; i++) {
-      var url = getBadgeUrl(badgePairs[i].set, badgePairs[i].version);
+      var url = getBadgeUrl(badgePairs[i].set);
       if (url) {
-        var img = document.createElement('img');
-        img.className = 'badge-img';
-        img.alt   = badgePairs[i].set;
-        img.title = badgePairs[i].set;
-        // Hide the img if it 404s (wrong UUID, etc.)
-        img.onerror = function() { this.setAttribute('data-broken', '1'); };
-        img.src = url; // set src last so onerror is already bound
-        wrap.appendChild(img);
+        var bimg = document.createElement('img');
+        bimg.className = 'badge-img';
+        bimg.alt   = badgePairs[i].set;
+        bimg.title = badgePairs[i].set;
+        bimg.onerror = function() { this.setAttribute('data-broken', '1'); };
+        bimg.src = url;
+        wrap.appendChild(bimg);
         added++;
       }
     }
     if (added) div.appendChild(wrap);
   }
 
+  // Username
   var nameEl = document.createElement('span');
   nameEl.className = 'username';
   nameEl.style.color = m.color;
   nameEl.textContent = m.display;
   div.appendChild(nameEl);
 
+  // Colon
   var colon = document.createElement('span');
   colon.className = 'colon';
   colon.textContent = ':';
   div.appendChild(colon);
 
-  var textEl = document.createElement('span');
-  textEl.className = 'text';
-  textEl.textContent = m.text;
-  div.appendChild(textEl);
+  // Message body (text + emotes)
+  var body = document.createElement('span');
+  body.className = 'body';
+  body.appendChild(buildBody(m.text, m.emotes));
+  div.appendChild(body);
 
   feed.appendChild(div);
   trim();
@@ -321,15 +400,12 @@ function trim() {
 
 function parseBadges(raw) {
   if (!raw) return [];
-  var out = [];
+  var out   = [];
   var parts = raw.split(',');
   for (var i = 0; i < parts.length; i++) {
     var slash = parts[i].indexOf('/');
     if (slash > -1) {
-      out.push({
-        set:     parts[i].slice(0, slash),
-        version: parts[i].slice(slash + 1)
-      });
+      out.push({ set: parts[i].slice(0, slash), version: parts[i].slice(slash + 1) });
     }
   }
   return out;
