@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Chat Overlay</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+#feed {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 10px;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.msg {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
+  padding: 4px 8px;
+  transition: opacity 1.5s ease,
+              max-height 0.6s ease 1.4s,
+              padding 0.6s ease 1.4s,
+              margin 0.6s ease 1.4s;
+  max-height: 200px;
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.msg.dying {
+  opacity: 0 !important;
+  max-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin: 0 !important;
+  pointer-events: none;
+}
+
+.badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  position: relative;
+  top: 2px; /* nudge down to sit on text baseline */
+}
+
+.badge-img {
+  width: 18px;
+  height: 18px;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
+}
+/* hide broken badges cleanly */
+.badge-img[data-broken="1"] { display: none; }
+
+.username {
+  font-weight: 700;
+  flex-shrink: 0;
+  text-shadow:
+    0 0 6px rgba(0,0,0,0.95),
+    0 1px 4px rgba(0,0,0,1),
+    1px 1px 0 rgba(0,0,0,0.85);
+}
+
+.colon {
+  color: rgba(255,255,255,0.45);
+  flex-shrink: 0;
+  text-shadow: 0 1px 3px rgba(0,0,0,1);
+}
+
+.text {
+  color: #f0f0f0;
+  text-shadow:
+    0 0 5px rgba(0,0,0,0.95),
+    0 1px 4px rgba(0,0,0,1),
+    1px 1px 0 rgba(0,0,0,0.85);
+}
+
+.sysmsg {
+  font-size: 12px;
+  font-style: italic;
+  color: #cc88ff;
+  padding: 3px 8px;
+  text-shadow: 0 1px 4px rgba(0,0,0,1);
+  animation: fadeIn 0.2s ease;
+  transition: opacity 1.5s ease,
+              max-height 0.6s ease 1.4s,
+              padding 0.6s ease 1.4s,
+              margin 0.6s ease 1.4s;
+  max-height: 200px;
+}
+.sysmsg.dying {
+  opacity: 0 !important;
+  max-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin: 0 !important;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+<div id="feed"></div>
+<script>
+// ─── CONFIG ──────────────────────────────────────
+var CHANNEL    = 'CHANNEL NAME';
+var MAX_MSGS   = 25;
+var FADE_AFTER = 30000; // milliseconds
+// ─────────────────────────────────────────────────
+
+// ── Hardcoded badge image URLs ────────────────────────────────────────────
+// <img> tags load cross-origin freely — no XHR/CORS involved at all.
+// Format: https://static-cdn.jtvnw.net/badges/v1/{badge-uuid}/{scale}
+//   scale 1 = 18px, 2 = 36px, 3 = 72px
+//
+// For subscriber badges: Twitch sends e.g. "subscriber/3006" where the
+// version encodes the sub tier + months. We map the version prefix to a
+// tier image, and fall back to the generic sub badge.
+var CDN = 'https://static-cdn.jtvnw.net/badges/v1/';
+
+var BADGE_URLS = {
+  // Standard global badges
+  'broadcaster':  CDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
+  'moderator':    CDN + '3267646d-33f0-4b17-b3df-f923a41db1d0/2',
+  'vip':          CDN + 'b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
+  'subscriber':   CDN + '5d9f2208-5dd8-11e7-8513-2ff4adfae661/2', // generic sub
+  'premium':      CDN + 'bbbe0db0-a598-423e-86d0-f9fb98ca1933/2', // Prime Gaming
+  'turbo':        CDN + 'bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
+  'partner':      CDN + 'd12a2e27-16f6-41d0-ab77-b780518f00a3/2',
+  'staff':        CDN + 'd97c37be-e797-4a18-a3ae-31d92135e8a0/2',
+  'admin':        CDN + '9ef7e029-4cdf-4d4d-a0d5-e2b3fb2583fe/2',
+  'global_mod':   CDN + '9384c428-3380-48c4-820d-0e1f4d500071/2',
+  'no_audio':     CDN + 'aef2cd08-f29b-45a1-8c12-d9bff2667d9f/2',
+  'no_video':     CDN + '199a0dba-8d77-45b5-b56e-a5b8c29f2462/2',
+  // Bits / Cheermotes (most common milestones)
+  'bits':         CDN + '73b5c3fb-24f9-4a82-a852-2f475ad29d43/2',
+  'bits-100':     CDN + '09d93036-e7ce-431c-9a9e-7044297133f2/2',
+  'bits-1000':    CDN + '0d85a29e-79ad-4c63-a285-3acd2c66f2ba/2',
+  'bits-5000':    CDN + '57de6f11-a20b-4e56-bd5e-b6dd2d9a7efe/2',
+  'bits-10000':   CDN + 'c55f9f22-0e5c-41ce-bf07-19a7fef23f78/2',
+  'bits-25000':   CDN + '64e1aec7-7c77-4dae-9bc2-e7a02c7b2dff/2',
+  'bits-100000':  CDN + 'ba2bfc4b-105d-4ca9-9c72-7d926d63a17e/2',
+};
+
+function getBadgeUrl(setName /*, version */) {
+  // For subscriber, just show generic sub icon regardless of tier/months
+  // (channel-specific sub art would need the Helix API + a Client-ID)
+  if (setName === 'subscriber') return BADGE_URLS['subscriber'];
+  // For bits, try to find a tier match, fallback to generic
+  if (setName === 'bits') return BADGE_URLS['bits'];
+  return BADGE_URLS[setName] || null;
+}
+
+// ── IRC connection ────────────────────────────────────────────────────────
+var feed = document.getElementById('feed');
+var ws   = null;
+var retryTimer = null;
+
+function connect() {
+  if (ws) {
+    ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+
+  ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+
+  ws.onopen = function() {
+    ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership');
+    ws.send('PASS SCHMOOPIIE');
+    ws.send('NICK justinfan' + (10000 + Math.floor(Math.random() * 80000)));
+    ws.send('JOIN #' + CHANNEL);
+  };
+
+  ws.onmessage = function(evt) {
+    var lines = evt.data.split('\r\n');
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i]) onLine(lines[i]);
+    }
+  };
+
+  ws.onclose = function() { retryTimer = setTimeout(connect, 4000); };
+  ws.onerror = function() { ws.close(); };
+}
+
+function onLine(line) {
+  if (line.slice(0, 4) === 'PING') {
+    if (ws && ws.readyState === 1) ws.send('PONG :tmi.twitch.tv');
+    return;
+  }
+
+  var tags = {};
+  if (line.charAt(0) === '@') {
+    var sp    = line.indexOf(' ');
+    var pairs = line.slice(1, sp).split(';');
+    for (var i = 0; i < pairs.length; i++) {
+      var eq = pairs[i].indexOf('=');
+      if (eq > -1) tags[pairs[i].slice(0, eq)] = pairs[i].slice(eq + 1);
+    }
+    line = line.slice(sp + 1);
+  }
+
+  var parts  = line.split(' ');
+  var prefix = parts[0];
+  var cmd    = parts[1];
+
+  if (cmd === 'PRIVMSG') {
+    var bang = prefix.indexOf('!');
+    var nick = bang > -1 ? prefix.slice(1, bang) : prefix.slice(1);
+    var ci   = line.indexOf(':', line.indexOf('PRIVMSG'));
+    var text = ci > -1 ? line.slice(ci + 1) : '';
+    addMsg({
+      display: tags['display-name'] || nick,
+      color:   tags['color']        || autoColor(nick),
+      badges:  tags['badges']       || '',
+      text:    text
+    });
+  }
+
+  if (cmd === 'USERNOTICE') {
+    var sys = (tags['system-msg'] || '').replace(/\\s/g, ' ');
+    if (sys) addSys(sys);
+  }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────
+function scheduleFade(el) {
+  setTimeout(function() {
+    el.classList.add('dying');
+    setTimeout(function() {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 2700);
+  }, FADE_AFTER);
+}
+
+function addMsg(m) {
+  var div = document.createElement('div');
+  div.className = 'msg';
+
+  // Badges
+  var badgePairs = parseBadges(m.badges);
+  if (badgePairs.length) {
+    var wrap = document.createElement('span');
+    wrap.className = 'badges';
+    var added = 0;
+    for (var i = 0; i < badgePairs.length; i++) {
+      var url = getBadgeUrl(badgePairs[i].set, badgePairs[i].version);
+      if (url) {
+        var img = document.createElement('img');
+        img.className = 'badge-img';
+        img.alt   = badgePairs[i].set;
+        img.title = badgePairs[i].set;
+        // Hide the img if it 404s (wrong UUID, etc.)
+        img.onerror = function() { this.setAttribute('data-broken', '1'); };
+        img.src = url; // set src last so onerror is already bound
+        wrap.appendChild(img);
+        added++;
+      }
+    }
+    if (added) div.appendChild(wrap);
+  }
+
+  var nameEl = document.createElement('span');
+  nameEl.className = 'username';
+  nameEl.style.color = m.color;
+  nameEl.textContent = m.display;
+  div.appendChild(nameEl);
+
+  var colon = document.createElement('span');
+  colon.className = 'colon';
+  colon.textContent = ':';
+  div.appendChild(colon);
+
+  var textEl = document.createElement('span');
+  textEl.className = 'text';
+  textEl.textContent = m.text;
+  div.appendChild(textEl);
+
+  feed.appendChild(div);
+  trim();
+  scheduleFade(div);
+}
+
+function addSys(text) {
+  var div = document.createElement('div');
+  div.className = 'sysmsg';
+  div.textContent = '★ ' + text;
+  feed.appendChild(div);
+  trim();
+  scheduleFade(div);
+}
+
+function trim() {
+  while (feed.children.length > MAX_MSGS) {
+    feed.removeChild(feed.firstChild);
+  }
+}
+
+function parseBadges(raw) {
+  if (!raw) return [];
+  var out = [];
+  var parts = raw.split(',');
+  for (var i = 0; i < parts.length; i++) {
+    var slash = parts[i].indexOf('/');
+    if (slash > -1) {
+      out.push({
+        set:     parts[i].slice(0, slash),
+        version: parts[i].slice(slash + 1)
+      });
+    }
+  }
+  return out;
+}
+
+function autoColor(nick) {
+  var h = 0;
+  for (var i = 0; i < nick.length; i++) h = nick.charCodeAt(i) + ((h << 5) - h);
+  return 'hsl(' + (Math.abs(h) % 360) + ',65%,65%)';
+}
+
+connect();
+</script>
+</body>
+</html>
