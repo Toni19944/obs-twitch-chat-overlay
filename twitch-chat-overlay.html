@@ -71,7 +71,6 @@ html, body {
   display: block;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
 }
-.badge-img[data-broken="1"] { display: none; }
 
 .username {
   font-weight: 700;
@@ -94,7 +93,6 @@ html, body {
     0 1px 4px rgba(0,0,0,1),
     1px 1px 0 rgba(0,0,0,0.85);
 }
-
 .emote-img {
   display: inline-block;
   height: 22px;
@@ -105,7 +103,6 @@ html, body {
   top: -1px;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
 }
-
 .sysmsg {
   font-size: 12px;
   font-style: italic;
@@ -135,22 +132,20 @@ html, body {
 // ─── CONFIG ──────────────────────────────────────
 var CHANNEL    = 'toni_sins__';
 var MAX_MSGS   = 25;
-var FADE_AFTER = 30000; // ms — use 999999999 to disable fading
+var FADE_AFTER = 30000;
 // ─────────────────────────────────────────────────
 
 var feed = document.getElementById('feed');
 var ws = null, retryTimer = null;
-var roomId = null, dataLoaded = false;
+var dataLoaded = false;
 
 // badge storage: badgeMap[setName][version] = url
 var badgeMap = {};
 
-// third-party emote lookup: word -> image url
-// populated from BTTV + FFZ + 7TV on connect
+// third-party emotes: word -> url
 var thirdPartyEmotes = {};
 
-// ── Badge CDN fallbacks ───────────────────────────────────────────────────
-// Used when the API hasn't responded yet or fails.
+// ── Badge fallback URLs (shown instantly while API loads) ─────────────────
 var BCDN = 'https://static-cdn.jtvnw.net/badges/v1/';
 var BADGE_FALLBACKS = {
   'broadcaster': BCDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
@@ -171,15 +166,29 @@ function getBadgeUrl(setName, version) {
   return BADGE_FALLBACKS[setName] || null;
 }
 
-// ── Data loading (badges + third-party emotes) ────────────────────────────
-function loadAllData(rId) {
-  loadBadges(rId);
-  loadBTTV(rId);
-  loadFFZ();
-  load7TV(rId);
+// After API data arrives, sweep all badge imgs already in the DOM and
+// update their src if we now have a better URL for them.
+function refreshBadgesInDom() {
+  var imgs = feed.querySelectorAll('img.badge-img');
+  for (var i = 0; i < imgs.length; i++) {
+    var img     = imgs[i];
+    var setName = img.getAttribute('data-set');
+    var version = img.getAttribute('data-version');
+    if (!setName) continue;
+    var url = getBadgeUrl(setName, version);
+    if (url && img.src !== url) img.src = url;
+  }
 }
 
-function loadBadges(rId) {
+// ── Data loading ──────────────────────────────────────────────────────────
+function loadAllData(roomId) {
+  loadBadges(roomId);
+  loadBTTV(roomId);
+  loadFFZ();
+  load7TV(roomId);
+}
+
+function loadBadges(roomId) {
   function ingest(data) {
     var sets = data && data.badge_sets;
     if (!sets) return;
@@ -191,21 +200,18 @@ function loadBadges(rId) {
           versions[ver].image_url_2x || versions[ver].image_url_1x;
       });
     });
+    // Update any badges already rendered with default images
+    refreshBadgesInDom();
   }
-  // Global badges
+
   fetch('https://badges.twitch.tv/v1/badges/global/display')
-    .then(function(r) { return r.json(); })
-    .then(ingest)
-    .catch(function() {});
-  // Channel-specific badges (custom sub tiers etc.)
-  fetch('https://badges.twitch.tv/v1/badges/channels/' + rId + '/display')
-    .then(function(r) { return r.json(); })
-    .then(ingest)
-    .catch(function() {});
+    .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
+
+  fetch('https://badges.twitch.tv/v1/badges/channels/' + roomId + '/display')
+    .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
 }
 
-function loadBTTV(rId) {
-  // Global BTTV emotes
+function loadBTTV(roomId) {
   fetch('https://api.betterttv.net/3/cached/emotes/global')
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -213,74 +219,61 @@ function loadBTTV(rId) {
       data.forEach(function(e) {
         thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
       });
-    })
-    .catch(function() {});
-  // Channel BTTV emotes (channelEmotes + sharedEmotes)
-  fetch('https://api.betterttv.net/3/cached/users/twitch/' + rId)
+    }).catch(function() {});
+
+  fetch('https://api.betterttv.net/3/cached/users/twitch/' + roomId)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var emotes = (data.channelEmotes || []).concat(data.sharedEmotes || []);
       emotes.forEach(function(e) {
         thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
       });
-    })
-    .catch(function() {});
+    }).catch(function() {});
 }
 
 function loadFFZ() {
-  // FFZ uses channel name (not numeric ID)
   fetch('https://api.frankerfacez.com/v1/room/' + CHANNEL)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var sets = data.sets || {};
       Object.keys(sets).forEach(function(setId) {
-        var emoticons = sets[setId].emoticons || [];
-        emoticons.forEach(function(e) {
+        (sets[setId].emoticons || []).forEach(function(e) {
           if (!e.name || !e.urls) return;
           var url = e.urls['2'] || e.urls['1'];
           if (!url) return;
-          // FFZ URLs are sometimes protocol-relative (//)
           if (url.slice(0, 2) === '//') url = 'https:' + url;
           thirdPartyEmotes[e.name] = url;
         });
       });
-    })
-    .catch(function() {});
+    }).catch(function() {});
 }
 
-function load7TV(rId) {
-  // Global 7TV emotes
+function load7TV(roomId) {
   fetch('https://7tv.io/v3/emote-sets/global')
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      var emotes = data.emotes || [];
-      emotes.forEach(function(e) {
-        if (e.name && e.id) {
+      (data.emotes || []).forEach(function(e) {
+        if (e.name && e.id)
           thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
-        }
       });
-    })
-    .catch(function() {});
-  // Channel 7TV emotes
-  fetch('https://7tv.io/v3/users/twitch/' + rId)
+    }).catch(function() {});
+
+  fetch('https://7tv.io/v3/users/twitch/' + roomId)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var emotes = (data.emote_set && data.emote_set.emotes) || [];
       emotes.forEach(function(e) {
-        if (e.name && e.id) {
+        if (e.name && e.id)
           thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
-        }
       });
-    })
-    .catch(function() {});
+    }).catch(function() {});
 }
 
-// ── IRC connection ────────────────────────────────────────────────────────
+// ── IRC ───────────────────────────────────────────────────────────────────
 function connect() {
   if (ws) {
     ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-    ws.close();
-    ws = null;
+    ws.close(); ws = null;
   }
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 
@@ -292,14 +285,10 @@ function connect() {
     ws.send('NICK justinfan' + (10000 + Math.floor(Math.random() * 80000)));
     ws.send('JOIN #' + CHANNEL);
   };
-
   ws.onmessage = function(evt) {
     var lines = evt.data.split('\r\n');
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i]) onLine(lines[i]);
-    }
+    for (var i = 0; i < lines.length; i++) { if (lines[i]) onLine(lines[i]); }
   };
-
   ws.onclose = function() { retryTimer = setTimeout(connect, 4000); };
   ws.onerror = function() { ws.close(); };
 }
@@ -321,15 +310,13 @@ function onLine(line) {
     line = line.slice(sp + 1);
   }
 
-  var parts  = line.split(' ');
+  var parts = line.split(' ');
   var prefix = parts[0];
   var cmd    = parts[1];
 
-  // ROOMSTATE gives us the room-id we need for all API calls
   if (cmd === 'ROOMSTATE' && tags['room-id'] && !dataLoaded) {
     dataLoaded = true;
-    roomId = tags['room-id'];
-    loadAllData(roomId);
+    loadAllData(tags['room-id']);
   }
 
   if (cmd === 'PRIVMSG') {
@@ -352,12 +339,11 @@ function onLine(line) {
   }
 }
 
-// ── Emote parsing ─────────────────────────────────────────────────────────
+// ── Emotes ────────────────────────────────────────────────────────────────
 function getEmoteUrl(id) {
   return 'https://static-cdn.jtvnw.net/emoticons/v2/' + id + '/default/dark/2.0';
 }
 
-// Parse Twitch emote tag into sorted list of {id, start, end}
 function parseTwitchEmotes(tag) {
   if (!tag) return [];
   var result = [];
@@ -366,7 +352,7 @@ function parseTwitchEmotes(tag) {
     if (!groups[i]) continue;
     var colon = groups[i].indexOf(':');
     if (colon < 0) continue;
-    var id     = groups[i].slice(0, colon);
+    var id = groups[i].slice(0, colon);
     var ranges = groups[i].slice(colon + 1).split(',');
     for (var j = 0; j < ranges.length; j++) {
       var dash = ranges[j].indexOf('-');
@@ -374,7 +360,7 @@ function parseTwitchEmotes(tag) {
       result.push({
         id:    id,
         start: parseInt(ranges[j].slice(0, dash), 10),
-        end:   parseInt(ranges[j].slice(dash + 1), 10) // inclusive
+        end:   parseInt(ranges[j].slice(dash + 1), 10)
       });
     }
   }
@@ -382,7 +368,6 @@ function parseTwitchEmotes(tag) {
   return result;
 }
 
-// Split a JS string into Unicode codepoints (handles emoji / surrogate pairs)
 function toCodepoints(str) {
   var arr = [];
   for (var i = 0; i < str.length; ) {
@@ -393,9 +378,6 @@ function toCodepoints(str) {
   return arr;
 }
 
-// Build the full message body as a DocumentFragment.
-// Twitch emote positions take priority; remaining text is scanned for
-// third-party emotes word-by-word.
 function buildBody(text, emoteTag) {
   var frag   = document.createDocumentFragment();
   var twitch = parseTwitchEmotes(emoteTag);
@@ -404,25 +386,14 @@ function buildBody(text, emoteTag) {
 
   for (var e = 0; e < twitch.length; e++) {
     var em = twitch[e];
-    // Text segment before this Twitch emote
-    if (em.start > cursor) {
-      appendThirdParty(frag, chars.slice(cursor, em.start).join(''));
-    }
-    // Twitch native emote image
+    if (em.start > cursor) appendThirdParty(frag, chars.slice(cursor, em.start).join(''));
     appendEmote(frag, getEmoteUrl(em.id), chars.slice(em.start, em.end + 1).join(''));
     cursor = em.end + 1;
   }
-
-  // Remaining text after last Twitch emote
-  if (cursor < chars.length) {
-    appendThirdParty(frag, chars.slice(cursor).join(''));
-  }
-
+  if (cursor < chars.length) appendThirdParty(frag, chars.slice(cursor).join(''));
   return frag;
 }
 
-// Split a text segment by spaces and replace known third-party emote words
-// with images. Preserves spaces and unknown words as text nodes.
 function appendThirdParty(frag, text) {
   var words = text.split(' ');
   for (var i = 0; i < words.length; i++) {
@@ -430,25 +401,17 @@ function appendThirdParty(frag, text) {
     var word = words[i];
     if (!word) continue;
     var url = thirdPartyEmotes[word];
-    if (url) {
-      appendEmote(frag, url, word);
-    } else {
-      frag.appendChild(document.createTextNode(word));
-    }
+    if (url) appendEmote(frag, url, word);
+    else frag.appendChild(document.createTextNode(word));
   }
 }
 
-// Create an emote <img> and append to a fragment.
-// On error, fall back to showing the alt text so nothing disappears silently.
 function appendEmote(frag, url, name) {
   var img = document.createElement('img');
   img.className = 'emote-img';
-  img.alt   = name;
-  img.title = name;
+  img.alt = name; img.title = name;
   img.onerror = function() {
-    if (this.parentNode) {
-      this.parentNode.replaceChild(document.createTextNode(this.alt), this);
-    }
+    if (this.parentNode) this.parentNode.replaceChild(document.createTextNode(this.alt), this);
   };
   img.src = url;
   frag.appendChild(img);
@@ -458,9 +421,7 @@ function appendEmote(frag, url, name) {
 function scheduleFade(el) {
   setTimeout(function() {
     el.classList.add('dying');
-    setTimeout(function() {
-      if (el.parentNode) el.parentNode.removeChild(el);
-    }, 2700);
+    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 2700);
   }, FADE_AFTER);
 }
 
@@ -468,7 +429,8 @@ function addMsg(m) {
   var div = document.createElement('div');
   div.className = 'msg';
 
-  // Badges
+  // Badges — render immediately with whatever URL we have (fallback or real),
+  // and stamp data-set + data-version so refreshBadgesInDom() can upgrade them later.
   var badgePairs = parseBadges(m.badges);
   if (badgePairs.length) {
     var wrap = document.createElement('span');
@@ -479,9 +441,11 @@ function addMsg(m) {
       if (url) {
         var bimg = document.createElement('img');
         bimg.className = 'badge-img';
+        bimg.setAttribute('data-set', badgePairs[i].set);
+        bimg.setAttribute('data-version', badgePairs[i].version);
         bimg.alt   = badgePairs[i].set;
         bimg.title = badgePairs[i].set;
-        bimg.onerror = function() { this.setAttribute('data-broken', '1'); };
+        bimg.onerror = function() { this.style.display = 'none'; };
         bimg.src = url;
         wrap.appendChild(bimg);
         added++;
@@ -490,20 +454,17 @@ function addMsg(m) {
     if (added) div.appendChild(wrap);
   }
 
-  // Username
   var nameEl = document.createElement('span');
   nameEl.className = 'username';
   nameEl.style.color = m.color;
   nameEl.textContent = m.display;
   div.appendChild(nameEl);
 
-  // Colon separator
   var colon = document.createElement('span');
   colon.className = 'colon';
   colon.textContent = ':';
   div.appendChild(colon);
 
-  // Message body (Twitch emotes + third-party emotes + plain text)
   var body = document.createElement('span');
   body.className = 'body';
   body.appendChild(buildBody(m.text, m.emotes));
@@ -524,9 +485,7 @@ function addSys(text) {
 }
 
 function trim() {
-  while (feed.children.length > MAX_MSGS) {
-    feed.removeChild(feed.firstChild);
-  }
+  while (feed.children.length > MAX_MSGS) feed.removeChild(feed.firstChild);
 }
 
 function parseBadges(raw) {
@@ -534,9 +493,7 @@ function parseBadges(raw) {
   var out = [], parts = raw.split(',');
   for (var i = 0; i < parts.length; i++) {
     var slash = parts[i].indexOf('/');
-    if (slash > -1) {
-      out.push({ set: parts[i].slice(0, slash), version: parts[i].slice(slash + 1) });
-    }
+    if (slash > -1) out.push({ set: parts[i].slice(0, slash), version: parts[i].slice(slash + 1) });
   }
   return out;
 }
