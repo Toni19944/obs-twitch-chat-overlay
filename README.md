@@ -21,3 +21,9 @@ I'm using 400x700 size on a 1080p stream (just a point of reference you know...)
 ---
 
 ![demo](chat-overlay-demo.gif)
+
+---
+
+## Disclaimer
+
+This was coded/created with Claude AI (Sonnet 4.6). I know frick-all about programming/coding. Just figured to inform that instead of being all like "I made this" when in reality I mostly copy pasted code.
