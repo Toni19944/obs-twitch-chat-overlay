@@ -14,7 +14,7 @@ Simple HTML browser source overlay. Connects anonymously via Twitch IRC. Does no
   - additionally you can change the max messages amount and fade out timer.  
     - default max messages: ```25```. Fade out: ```30s```
   - if you don't want messages to fade out:  
-    - comment out the ```scheduleFade(div);``` lines with ```//``` - these are on lines 383 and 392
+    - comment out the ```scheduleFade(div);``` lines with ```//``` - these are on lines 475 and 484
 - Add the html file as a browser source in OBS.
 - profit???
 
