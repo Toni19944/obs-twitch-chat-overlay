@@ -130,7 +130,7 @@ html, body {
 <div id="feed"></div>
 <script>
 // ─── CONFIG ──────────────────────────────────────
-var CHANNEL    = 'toni_sins__';
+var CHANNEL = new URLSearchParams(window.location.search).get('channel') || 'toni_sins__';
 var MAX_MSGS   = 25;
 var FADE_AFTER = 30000;
 // ─────────────────────────────────────────────────
