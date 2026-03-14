@@ -56,7 +56,6 @@ html, body {
   margin: 0 !important;
   pointer-events: none;
 }
-
 .badges {
   display: inline-flex;
   align-items: center;
@@ -71,7 +70,6 @@ html, body {
   display: block;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
 }
-
 .username {
   font-weight: 700;
   flex-shrink: 0;
@@ -124,387 +122,417 @@ html, body {
   margin: 0 !important;
   pointer-events: none;
 }
+
+/* Shown if no channel param is given */
+#nochannel {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.4);
+  font-size: 13px;
+  text-shadow: 0 1px 3px rgba(0,0,0,1);
+}
 </style>
 </head>
 <body>
 <div id="feed"></div>
+<div id="nochannel" style="display:none">No channel specified — use the setup page to generate your URL.</div>
 <script>
-// ─── CONFIG ──────────────────────────────────────
-var CHANNEL = new URLSearchParams(window.location.search).get('channel') || 'toni_sins__';
-var MAX_MSGS   = 25;
-var FADE_AFTER = 30000;
-// ─────────────────────────────────────────────────
+// ── Read config from URL parameters ───────────────────────────────────────
+var params = new URLSearchParams(window.location.search);
 
-var feed = document.getElementById('feed');
-var ws = null, retryTimer = null;
-var dataLoaded = false;
+var CHANNEL              = (params.get('channel')       || '').toLowerCase().trim();
+var MAX_MSGS             = parseInt(params.get('max')    || '25', 10);
+var FADE_AFTER           = parseInt(params.get('fade')  || '30000', 10);
+var TWITCH_CLIENT_ID     = params.get('client_id')      || '';
+var TWITCH_CLIENT_SECRET = params.get('client_secret')  || '';
+// ─────────────────────────────────────────────────────────────────────────
 
-// badge storage: badgeMap[setName][version] = url
-var badgeMap = {};
+if (!CHANNEL) {
+  document.getElementById('nochannel').style.display = 'flex';
+} else {
+  var feed = document.getElementById('feed');
+  var ws = null, retryTimer = null, dataLoaded = false;
+  var badgeMap = {};
+  var thirdPartyEmotes = {};
 
-// third-party emotes: word -> url
-var thirdPartyEmotes = {};
+  // ── Badge fallbacks ─────────────────────────────────────────────────────
+  var BCDN = 'https://static-cdn.jtvnw.net/badges/v1/';
+  var BADGE_FALLBACKS = {
+    'broadcaster': BCDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
+    'moderator':   BCDN + '3267646d-33f0-4b17-b3df-f923a41db1d0/2',
+    'vip':         BCDN + 'b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
+    'subscriber':  BCDN + '5d9f2208-5dd8-11e7-8513-2ff4adfae661/2',
+    'premium':     BCDN + 'bbbe0db0-a598-423e-86d0-f9fb98ca1933/2',
+    'turbo':       BCDN + 'bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
+    'partner':     BCDN + 'd12a2e27-16f6-41d0-ab77-b780518f00a3/2',
+    'staff':       BCDN + 'd97c37be-e797-4a18-a3ae-31d92135e8a0/2',
+    'bits':        BCDN + '73b5c3fb-24f9-4a82-a852-2f475ad29d43/2',
+  };
 
-// ── Badge fallback URLs (shown instantly while API loads) ─────────────────
-var BCDN = 'https://static-cdn.jtvnw.net/badges/v1/';
-var BADGE_FALLBACKS = {
-  'broadcaster': BCDN + '5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
-  'moderator':   BCDN + '3267646d-33f0-4b17-b3df-f923a41db1d0/2',
-  'vip':         BCDN + 'b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
-  'subscriber':  BCDN + '5d9f2208-5dd8-11e7-8513-2ff4adfae661/2',
-  'premium':     BCDN + 'bbbe0db0-a598-423e-86d0-f9fb98ca1933/2',
-  'turbo':       BCDN + 'bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
-  'partner':     BCDN + 'd12a2e27-16f6-41d0-ab77-b780518f00a3/2',
-  'staff':       BCDN + 'd97c37be-e797-4a18-a3ae-31d92135e8a0/2',
-  'bits':        BCDN + '73b5c3fb-24f9-4a82-a852-2f475ad29d43/2',
-};
-
-function getBadgeUrl(setName, version) {
-  if (badgeMap[setName]) {
-    return badgeMap[setName][version] || badgeMap[setName]['0'] || null;
-  }
-  return BADGE_FALLBACKS[setName] || null;
-}
-
-// After API data arrives, sweep all badge imgs already in the DOM and
-// update their src if we now have a better URL for them.
-function refreshBadgesInDom() {
-  var imgs = feed.querySelectorAll('img.badge-img');
-  for (var i = 0; i < imgs.length; i++) {
-    var img     = imgs[i];
-    var setName = img.getAttribute('data-set');
-    var version = img.getAttribute('data-version');
-    if (!setName) continue;
-    var url = getBadgeUrl(setName, version);
-    if (url && img.src !== url) img.src = url;
-  }
-}
-
-// ── Data loading ──────────────────────────────────────────────────────────
-function loadAllData(roomId) {
-  loadBadges(roomId);
-  loadBTTV(roomId);
-  loadFFZ();
-  load7TV(roomId);
-}
-
-function loadBadges(roomId) {
-  function ingest(data) {
-    var sets = data && data.badge_sets;
-    if (!sets) return;
-    Object.keys(sets).forEach(function(setName) {
-      var versions = sets[setName].versions || {};
-      if (!badgeMap[setName]) badgeMap[setName] = {};
-      Object.keys(versions).forEach(function(ver) {
-        badgeMap[setName][ver] =
-          versions[ver].image_url_2x || versions[ver].image_url_1x;
-      });
-    });
-    // Update any badges already rendered with default images
-    refreshBadgesInDom();
+  function getBadgeUrl(setName, version) {
+    if (badgeMap[setName]) {
+      return badgeMap[setName][version] || badgeMap[setName]['0'] || null;
+    }
+    return BADGE_FALLBACKS[setName] || null;
   }
 
-  fetch('https://badges.twitch.tv/v1/badges/global/display')
-    .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
+  function refreshBadgesInDom() {
+    var imgs = feed.querySelectorAll('img.badge-img');
+    for (var i = 0; i < imgs.length; i++) {
+      var img     = imgs[i];
+      var setName = img.getAttribute('data-set');
+      var version = img.getAttribute('data-version');
+      if (!setName) continue;
+      var url = getBadgeUrl(setName, version);
+      if (url && img.src !== url) img.src = url;
+    }
+  }
 
-  fetch('https://badges.twitch.tv/v1/badges/channels/' + roomId + '/display')
-    .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
-}
-
-function loadBTTV(roomId) {
-  fetch('https://api.betterttv.net/3/cached/emotes/global')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!Array.isArray(data)) return;
-      data.forEach(function(e) {
-        thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
+  // ── Data loading ──────────────────────────────────────────────────────
+  function loadAllData(roomId) {
+    loadBTTV(roomId);
+    loadFFZ();
+    load7TV(roomId);
+    if (TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET) {
+      getAppToken(function(token) {
+        if (token) loadBadgesHelix(roomId, token);
+        else       loadBadgesV1(roomId);
       });
-    }).catch(function() {});
+    } else {
+      loadBadgesV1(roomId);
+    }
+  }
 
-  fetch('https://api.betterttv.net/3/cached/users/twitch/' + roomId)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var emotes = (data.channelEmotes || []).concat(data.sharedEmotes || []);
-      emotes.forEach(function(e) {
-        thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
-      });
-    }).catch(function() {});
-}
+  function getAppToken(cb) {
+    fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'client_id=' + TWITCH_CLIENT_ID +
+            '&client_secret=' + TWITCH_CLIENT_SECRET +
+            '&grant_type=client_credentials'
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { cb(d.access_token || null); })
+      .catch(function() { cb(null); });
+  }
 
-function loadFFZ() {
-  fetch('https://api.frankerfacez.com/v1/room/' + CHANNEL)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var sets = data.sets || {};
-      Object.keys(sets).forEach(function(setId) {
-        (sets[setId].emoticons || []).forEach(function(e) {
-          if (!e.name || !e.urls) return;
-          var url = e.urls['2'] || e.urls['1'];
-          if (!url) return;
-          if (url.slice(0, 2) === '//') url = 'https:' + url;
-          thirdPartyEmotes[e.name] = url;
+  function loadBadgesHelix(roomId, token) {
+    var headers = {
+      'Client-ID': TWITCH_CLIENT_ID,
+      'Authorization': 'Bearer ' + token
+    };
+    function ingest(data) {
+      (data.data || []).forEach(function(badge) {
+        var setName = badge.set_id;
+        if (!badgeMap[setName]) badgeMap[setName] = {};
+        (badge.versions || []).forEach(function(ver) {
+          badgeMap[setName][ver.id] = ver.image_url_2x || ver.image_url_1x;
         });
       });
-    }).catch(function() {});
-}
-
-function load7TV(roomId) {
-  fetch('https://7tv.io/v3/emote-sets/global')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      (data.emotes || []).forEach(function(e) {
-        if (e.name && e.id)
-          thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
-      });
-    }).catch(function() {});
-
-  fetch('https://7tv.io/v3/users/twitch/' + roomId)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var emotes = (data.emote_set && data.emote_set.emotes) || [];
-      emotes.forEach(function(e) {
-        if (e.name && e.id)
-          thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
-      });
-    }).catch(function() {});
-}
-
-// ── IRC ───────────────────────────────────────────────────────────────────
-function connect() {
-  if (ws) {
-    ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-    ws.close(); ws = null;
-  }
-  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-
-  ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
-
-  ws.onopen = function() {
-    ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership');
-    ws.send('PASS SCHMOOPIIE');
-    ws.send('NICK justinfan' + (10000 + Math.floor(Math.random() * 80000)));
-    ws.send('JOIN #' + CHANNEL);
-  };
-  ws.onmessage = function(evt) {
-    var lines = evt.data.split('\r\n');
-    for (var i = 0; i < lines.length; i++) { if (lines[i]) onLine(lines[i]); }
-  };
-  ws.onclose = function() { retryTimer = setTimeout(connect, 4000); };
-  ws.onerror = function() { ws.close(); };
-}
-
-function onLine(line) {
-  if (line.slice(0, 4) === 'PING') {
-    if (ws && ws.readyState === 1) ws.send('PONG :tmi.twitch.tv');
-    return;
-  }
-
-  var tags = {};
-  if (line.charAt(0) === '@') {
-    var sp    = line.indexOf(' ');
-    var pairs = line.slice(1, sp).split(';');
-    for (var i = 0; i < pairs.length; i++) {
-      var eq = pairs[i].indexOf('=');
-      if (eq > -1) tags[pairs[i].slice(0, eq)] = pairs[i].slice(eq + 1);
+      refreshBadgesInDom();
     }
-    line = line.slice(sp + 1);
+    fetch('https://api.twitch.tv/helix/chat/badges/global', { headers: headers })
+      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
+    fetch('https://api.twitch.tv/helix/chat/badges?broadcaster_id=' + roomId, { headers: headers })
+      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
   }
 
-  var parts = line.split(' ');
-  var prefix = parts[0];
-  var cmd    = parts[1];
-
-  if (cmd === 'ROOMSTATE' && tags['room-id'] && !dataLoaded) {
-    dataLoaded = true;
-    loadAllData(tags['room-id']);
+  function loadBadgesV1(roomId) {
+    function ingest(data) {
+      var sets = data && data.badge_sets;
+      if (!sets) return;
+      Object.keys(sets).forEach(function(setName) {
+        var versions = sets[setName].versions || {};
+        if (!badgeMap[setName]) badgeMap[setName] = {};
+        Object.keys(versions).forEach(function(ver) {
+          badgeMap[setName][ver] = versions[ver].image_url_2x || versions[ver].image_url_1x;
+        });
+      });
+      refreshBadgesInDom();
+    }
+    fetch('https://badges.twitch.tv/v1/badges/global/display')
+      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
+    fetch('https://badges.twitch.tv/v1/badges/channels/' + roomId + '/display')
+      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
   }
 
-  if (cmd === 'PRIVMSG') {
-    var bang = prefix.indexOf('!');
-    var nick = bang > -1 ? prefix.slice(1, bang) : prefix.slice(1);
-    var ci   = line.indexOf(':', line.indexOf('PRIVMSG'));
-    var text = ci > -1 ? line.slice(ci + 1) : '';
-    addMsg({
-      display: tags['display-name'] || nick,
-      color:   tags['color']        || autoColor(nick),
-      badges:  tags['badges']       || '',
-      emotes:  tags['emotes']       || '',
-      text:    text
-    });
+  function loadBTTV(roomId) {
+    fetch('https://api.betterttv.net/3/cached/emotes/global')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!Array.isArray(data)) return;
+        data.forEach(function(e) {
+          thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
+        });
+      }).catch(function() {});
+    fetch('https://api.betterttv.net/3/cached/users/twitch/' + roomId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var emotes = (data.channelEmotes || []).concat(data.sharedEmotes || []);
+        emotes.forEach(function(e) {
+          thirdPartyEmotes[e.code] = 'https://cdn.betterttv.net/emote/' + e.id + '/2x';
+        });
+      }).catch(function() {});
   }
 
-  if (cmd === 'USERNOTICE') {
-    var sys = (tags['system-msg'] || '').replace(/\\s/g, ' ');
-    if (sys) addSys(sys);
+  function loadFFZ() {
+    fetch('https://api.frankerfacez.com/v1/room/' + CHANNEL)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var sets = data.sets || {};
+        Object.keys(sets).forEach(function(setId) {
+          (sets[setId].emoticons || []).forEach(function(e) {
+            if (!e.name || !e.urls) return;
+            var url = e.urls['2'] || e.urls['1'];
+            if (!url) return;
+            if (url.slice(0, 2) === '//') url = 'https:' + url;
+            thirdPartyEmotes[e.name] = url;
+          });
+        });
+      }).catch(function() {});
   }
-}
 
-// ── Emotes ────────────────────────────────────────────────────────────────
-function getEmoteUrl(id) {
-  return 'https://static-cdn.jtvnw.net/emoticons/v2/' + id + '/default/dark/2.0';
-}
+  function load7TV(roomId) {
+    fetch('https://7tv.io/v3/emote-sets/global')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        (data.emotes || []).forEach(function(e) {
+          if (e.name && e.id)
+            thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
+        });
+      }).catch(function() {});
+    fetch('https://7tv.io/v3/users/twitch/' + roomId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var emotes = (data.emote_set && data.emote_set.emotes) || [];
+        emotes.forEach(function(e) {
+          if (e.name && e.id)
+            thirdPartyEmotes[e.name] = 'https://cdn.7tv.app/emote/' + e.id + '/2x.webp';
+        });
+      }).catch(function() {});
+  }
 
-function parseTwitchEmotes(tag) {
-  if (!tag) return [];
-  var result = [];
-  var groups = tag.split('/');
-  for (var i = 0; i < groups.length; i++) {
-    if (!groups[i]) continue;
-    var colon = groups[i].indexOf(':');
-    if (colon < 0) continue;
-    var id = groups[i].slice(0, colon);
-    var ranges = groups[i].slice(colon + 1).split(',');
-    for (var j = 0; j < ranges.length; j++) {
-      var dash = ranges[j].indexOf('-');
-      if (dash < 0) continue;
-      result.push({
-        id:    id,
-        start: parseInt(ranges[j].slice(0, dash), 10),
-        end:   parseInt(ranges[j].slice(dash + 1), 10)
+  // ── IRC ──────────────────────────────────────────────────────────────
+  function connect() {
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+      ws.close(); ws = null;
+    }
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+    ws.onopen = function() {
+      ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership');
+      ws.send('PASS SCHMOOPIIE');
+      ws.send('NICK justinfan' + (10000 + Math.floor(Math.random() * 80000)));
+      ws.send('JOIN #' + CHANNEL);
+    };
+    ws.onmessage = function(evt) {
+      var lines = evt.data.split('\r\n');
+      for (var i = 0; i < lines.length; i++) { if (lines[i]) onLine(lines[i]); }
+    };
+    ws.onclose = function() { retryTimer = setTimeout(connect, 4000); };
+    ws.onerror = function() { ws.close(); };
+  }
+
+  function onLine(line) {
+    if (line.slice(0, 4) === 'PING') {
+      if (ws && ws.readyState === 1) ws.send('PONG :tmi.twitch.tv');
+      return;
+    }
+    var tags = {};
+    if (line.charAt(0) === '@') {
+      var sp    = line.indexOf(' ');
+      var pairs = line.slice(1, sp).split(';');
+      for (var i = 0; i < pairs.length; i++) {
+        var eq = pairs[i].indexOf('=');
+        if (eq > -1) tags[pairs[i].slice(0, eq)] = pairs[i].slice(eq + 1);
+      }
+      line = line.slice(sp + 1);
+    }
+    var parts  = line.split(' ');
+    var prefix = parts[0];
+    var cmd    = parts[1];
+    if (cmd === 'ROOMSTATE' && tags['room-id'] && !dataLoaded) {
+      dataLoaded = true;
+      loadAllData(tags['room-id']);
+    }
+    if (cmd === 'PRIVMSG') {
+      var bang = prefix.indexOf('!');
+      var nick = bang > -1 ? prefix.slice(1, bang) : prefix.slice(1);
+      var ci   = line.indexOf(':', line.indexOf('PRIVMSG'));
+      var text = ci > -1 ? line.slice(ci + 1) : '';
+      addMsg({
+        display: tags['display-name'] || nick,
+        color:   tags['color']        || autoColor(nick),
+        badges:  tags['badges']       || '',
+        emotes:  tags['emotes']       || '',
+        text:    text
       });
     }
+    if (cmd === 'USERNOTICE') {
+      var sys = (tags['system-msg'] || '').replace(/\\s/g, ' ');
+      if (sys) addSys(sys);
+    }
   }
-  result.sort(function(a, b) { return a.start - b.start; });
-  return result;
-}
 
-function toCodepoints(str) {
-  var arr = [];
-  for (var i = 0; i < str.length; ) {
-    var code = str.codePointAt(i);
-    arr.push(String.fromCodePoint(code));
-    i += code > 0xFFFF ? 2 : 1;
+  // ── Emotes ────────────────────────────────────────────────────────────
+  function getEmoteUrl(id) {
+    return 'https://static-cdn.jtvnw.net/emoticons/v2/' + id + '/default/dark/2.0';
   }
-  return arr;
-}
 
-function buildBody(text, emoteTag) {
-  var frag   = document.createDocumentFragment();
-  var twitch = parseTwitchEmotes(emoteTag);
-  var chars  = toCodepoints(text);
-  var cursor = 0;
-
-  for (var e = 0; e < twitch.length; e++) {
-    var em = twitch[e];
-    if (em.start > cursor) appendThirdParty(frag, chars.slice(cursor, em.start).join(''));
-    appendEmote(frag, getEmoteUrl(em.id), chars.slice(em.start, em.end + 1).join(''));
-    cursor = em.end + 1;
-  }
-  if (cursor < chars.length) appendThirdParty(frag, chars.slice(cursor).join(''));
-  return frag;
-}
-
-function appendThirdParty(frag, text) {
-  var words = text.split(' ');
-  for (var i = 0; i < words.length; i++) {
-    if (i > 0) frag.appendChild(document.createTextNode(' '));
-    var word = words[i];
-    if (!word) continue;
-    var url = thirdPartyEmotes[word];
-    if (url) appendEmote(frag, url, word);
-    else frag.appendChild(document.createTextNode(word));
-  }
-}
-
-function appendEmote(frag, url, name) {
-  var img = document.createElement('img');
-  img.className = 'emote-img';
-  img.alt = name; img.title = name;
-  img.onerror = function() {
-    if (this.parentNode) this.parentNode.replaceChild(document.createTextNode(this.alt), this);
-  };
-  img.src = url;
-  frag.appendChild(img);
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────
-function scheduleFade(el) {
-  setTimeout(function() {
-    el.classList.add('dying');
-    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 2700);
-  }, FADE_AFTER);
-}
-
-function addMsg(m) {
-  var div = document.createElement('div');
-  div.className = 'msg';
-
-  // Badges — render immediately with whatever URL we have (fallback or real),
-  // and stamp data-set + data-version so refreshBadgesInDom() can upgrade them later.
-  var badgePairs = parseBadges(m.badges);
-  if (badgePairs.length) {
-    var wrap = document.createElement('span');
-    wrap.className = 'badges';
-    var added = 0;
-    for (var i = 0; i < badgePairs.length; i++) {
-      var url = getBadgeUrl(badgePairs[i].set, badgePairs[i].version);
-      if (url) {
-        var bimg = document.createElement('img');
-        bimg.className = 'badge-img';
-        bimg.setAttribute('data-set', badgePairs[i].set);
-        bimg.setAttribute('data-version', badgePairs[i].version);
-        bimg.alt   = badgePairs[i].set;
-        bimg.title = badgePairs[i].set;
-        bimg.onerror = function() { this.style.display = 'none'; };
-        bimg.src = url;
-        wrap.appendChild(bimg);
-        added++;
+  function parseTwitchEmotes(tag) {
+    if (!tag) return [];
+    var result = [];
+    var groups = tag.split('/');
+    for (var i = 0; i < groups.length; i++) {
+      if (!groups[i]) continue;
+      var colon = groups[i].indexOf(':');
+      if (colon < 0) continue;
+      var id = groups[i].slice(0, colon);
+      var ranges = groups[i].slice(colon + 1).split(',');
+      for (var j = 0; j < ranges.length; j++) {
+        var dash = ranges[j].indexOf('-');
+        if (dash < 0) continue;
+        result.push({
+          id:    id,
+          start: parseInt(ranges[j].slice(0, dash), 10),
+          end:   parseInt(ranges[j].slice(dash + 1), 10)
+        });
       }
     }
-    if (added) div.appendChild(wrap);
+    result.sort(function(a, b) { return a.start - b.start; });
+    return result;
   }
 
-  var nameEl = document.createElement('span');
-  nameEl.className = 'username';
-  nameEl.style.color = m.color;
-  nameEl.textContent = m.display;
-  div.appendChild(nameEl);
-
-  var colon = document.createElement('span');
-  colon.className = 'colon';
-  colon.textContent = ':';
-  div.appendChild(colon);
-
-  var body = document.createElement('span');
-  body.className = 'body';
-  body.appendChild(buildBody(m.text, m.emotes));
-  div.appendChild(body);
-
-  feed.appendChild(div);
-  trim();
-  scheduleFade(div);
-}
-
-function addSys(text) {
-  var div = document.createElement('div');
-  div.className = 'sysmsg';
-  div.textContent = '★ ' + text;
-  feed.appendChild(div);
-  trim();
-  scheduleFade(div);
-}
-
-function trim() {
-  while (feed.children.length > MAX_MSGS) feed.removeChild(feed.firstChild);
-}
-
-function parseBadges(raw) {
-  if (!raw) return [];
-  var out = [], parts = raw.split(',');
-  for (var i = 0; i < parts.length; i++) {
-    var slash = parts[i].indexOf('/');
-    if (slash > -1) out.push({ set: parts[i].slice(0, slash), version: parts[i].slice(slash + 1) });
+  function toCodepoints(str) {
+    var arr = [];
+    for (var i = 0; i < str.length; ) {
+      var code = str.codePointAt(i);
+      arr.push(String.fromCodePoint(code));
+      i += code > 0xFFFF ? 2 : 1;
+    }
+    return arr;
   }
-  return out;
-}
 
-function autoColor(nick) {
-  var h = 0;
-  for (var i = 0; i < nick.length; i++) h = nick.charCodeAt(i) + ((h << 5) - h);
-  return 'hsl(' + (Math.abs(h) % 360) + ',65%,65%)';
-}
+  function buildBody(text, emoteTag) {
+    var frag   = document.createDocumentFragment();
+    var twitch = parseTwitchEmotes(emoteTag);
+    var chars  = toCodepoints(text);
+    var cursor = 0;
+    for (var e = 0; e < twitch.length; e++) {
+      var em = twitch[e];
+      if (em.start > cursor) appendThirdParty(frag, chars.slice(cursor, em.start).join(''));
+      appendEmote(frag, getEmoteUrl(em.id), chars.slice(em.start, em.end + 1).join(''));
+      cursor = em.end + 1;
+    }
+    if (cursor < chars.length) appendThirdParty(frag, chars.slice(cursor).join(''));
+    return frag;
+  }
 
-connect();
+  function appendThirdParty(frag, text) {
+    var words = text.split(' ');
+    for (var i = 0; i < words.length; i++) {
+      if (i > 0) frag.appendChild(document.createTextNode(' '));
+      var word = words[i];
+      if (!word) continue;
+      var url = thirdPartyEmotes[word];
+      if (url) appendEmote(frag, url, word);
+      else frag.appendChild(document.createTextNode(word));
+    }
+  }
+
+  function appendEmote(frag, url, name) {
+    var img = document.createElement('img');
+    img.className = 'emote-img';
+    img.alt = name; img.title = name;
+    img.onerror = function() {
+      if (this.parentNode) this.parentNode.replaceChild(document.createTextNode(this.alt), this);
+    };
+    img.src = url;
+    frag.appendChild(img);
+  }
+
+  // ── Rendering ─────────────────────────────────────────────────────────
+  function scheduleFade(el) {
+    setTimeout(function() {
+      el.classList.add('dying');
+      setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 2700);
+    }, FADE_AFTER);
+  }
+
+  function addMsg(m) {
+    var div = document.createElement('div');
+    div.className = 'msg';
+    var badgePairs = parseBadges(m.badges);
+    if (badgePairs.length) {
+      var wrap = document.createElement('span');
+      wrap.className = 'badges';
+      var added = 0;
+      for (var i = 0; i < badgePairs.length; i++) {
+        var url = getBadgeUrl(badgePairs[i].set, badgePairs[i].version);
+        if (url) {
+          var bimg = document.createElement('img');
+          bimg.className = 'badge-img';
+          bimg.setAttribute('data-set', badgePairs[i].set);
+          bimg.setAttribute('data-version', badgePairs[i].version);
+          bimg.alt = badgePairs[i].set; bimg.title = badgePairs[i].set;
+          bimg.onerror = function() { this.style.display = 'none'; };
+          bimg.src = url;
+          wrap.appendChild(bimg);
+          added++;
+        }
+      }
+      if (added) div.appendChild(wrap);
+    }
+    var nameEl = document.createElement('span');
+    nameEl.className = 'username';
+    nameEl.style.color = m.color;
+    nameEl.textContent = m.display;
+    div.appendChild(nameEl);
+    var colon = document.createElement('span');
+    colon.className = 'colon';
+    colon.textContent = ':';
+    div.appendChild(colon);
+    var body = document.createElement('span');
+    body.className = 'body';
+    body.appendChild(buildBody(m.text, m.emotes));
+    div.appendChild(body);
+    feed.appendChild(div);
+    trim();
+    scheduleFade(div);
+  }
+
+  function addSys(text) {
+    var div = document.createElement('div');
+    div.className = 'sysmsg';
+    div.textContent = '★ ' + text;
+    feed.appendChild(div);
+    trim();
+    scheduleFade(div);
+  }
+
+  function trim() {
+    while (feed.children.length > MAX_MSGS) feed.removeChild(feed.firstChild);
+  }
+
+  function parseBadges(raw) {
+    if (!raw) return [];
+    var out = [], parts = raw.split(',');
+    for (var i = 0; i < parts.length; i++) {
+      var slash = parts[i].indexOf('/');
+      if (slash > -1) out.push({ set: parts[i].slice(0, slash), version: parts[i].slice(slash + 1) });
+    }
+    return out;
+  }
+
+  function autoColor(nick) {
+    var h = 0;
+    for (var i = 0; i < nick.length; i++) h = nick.charCodeAt(i) + ((h << 5) - h);
+    return 'hsl(' + (Math.abs(h) % 360) + ',65%,65%)';
+  }
+
+  connect();
+}
 </script>
 </body>
 </html>
