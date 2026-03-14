@@ -2,23 +2,42 @@
 Simple HTML browser source overlay. Connects anonymously via Twitch IRC. Does not require log in or API keys or anything.  
 ---
 - Displays username colors and twitch default chat badges.
-  >custom badges would've been a lot harder to get to work, but if you really really want those then hit me up on socials and I can give you the version for that, it just requires a twitch dev app registration and you need to fill in your Client ID+Secret to the html file and host it through a command line local server if you want to keep it private. I personally didn't want to share mine publicly so I'll just take the hit on the badges and be happy that at least 3rd party emotes are working :)
-- Also supports emotes yippeee!
-  >twitch emotes and channel emotes only if you run locally. If you want 7tv/ffz/bttv support then you have to fork the repo and edit your channel name in the file, enable github pages and point OBS source to that pages url/overlay.html instead of local file. 
-- Should display correct colors that users have set and only use random color if an user has never set a custom color on twitch.  
+  >custom badges require you to register a developer app on twitch. But it's free and takes about 2-minutes. Refer to setup guide for more info on that. :)
+- Also supports bttv/ffz/7tv emotes yippeee!
 
 ---
-### Setup/installation
-- Download or copy paste the twitch-chat-overlay.html
-- CHANGE YOUR CHANNEL NAME (around the line 133 where the "config" part is")
-  - additionally you can change the max messages amount and fade out timer.  
-    - default max messages: ```25```. Fade out: ```30s```
-  - if you don't want messages to fade out:  
-    - comment out the ```scheduleFade(div);``` lines with ```//``` - these are on lines 475 and 484
-- Add the html file as a browser source in OBS.
-- profit???
+## Setup
 
-I'm using 400x700 size on a 1080p stream (just a point of reference you know...). No need to change any other settings if you don't want to. I have shutdown and refresh boxes ticked. Custom CSS and permissions are just default.
+1. Go to the **[Setup Page](https://toni19944.github.io/obs-twitch-chat-overlay/)**
+2. Enter your channel name and preferences
+3. Click **Generate OBS URL**
+4. In OBS, add a new **Browser Source**
+5. Paste the generated URL into the URL field
+6. Set your desired width/height (I'm using 400x700 on a 1080p stream, just for reference)
+7. Check **Allow transparency**
+8. Click OK — you're done!
+
+## Custom Sub Badges (optional)
+
+To show your channel's custom subscriber badge art:
+
+1. Register a free app at [dev.twitch.tv](https://dev.twitch.tv/console/apps)
+2. Set the OAuth redirect URL to `https://toni19944.github.io/obs-twitch-chat-overlay/`
+3. Set the Client Type to **Confidential**
+4. Copy your **Client ID** and generate a **Client Secret**
+5. Enter both in the setup page before generating your URL
+
+> ⚠️ Keep your generated URL private if it contains your Client ID and Secret — don't share it publicly.
+
+## Features
+
+- ✅ Twitch native emotes
+- ✅ BTTV, FFZ and 7TV emotes
+- ✅ Badges (mod, VIP, sub, broadcaster etc.)
+- ✅ Custom channel sub badge art (optional)
+- ✅ Messages fade out after 30 seconds
+- ✅ No login, no promo emails, no ads — just a single HTML file
+
 
 ---
 
