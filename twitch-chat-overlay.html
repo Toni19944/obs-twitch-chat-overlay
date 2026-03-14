@@ -231,10 +231,17 @@ if (!CHANNEL) {
       });
       refreshBadgesInDom();
     }
+    // Load global first, THEN channel — so channel badges always override global ones
     fetch('https://api.twitch.tv/helix/chat/badges/global', { headers: headers })
-      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
-    fetch('https://api.twitch.tv/helix/chat/badges?broadcaster_id=' + roomId, { headers: headers })
-      .then(function(r) { return r.json(); }).then(ingest).catch(function() {});
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        ingest(data);
+        // Channel badges loaded after global so they win any key conflicts
+        return fetch('https://api.twitch.tv/helix/chat/badges?broadcaster_id=' + roomId, { headers: headers });
+      })
+      .then(function(r) { return r.json(); })
+      .then(ingest)
+      .catch(function() {});
   }
 
   function loadBadgesV1(roomId) {
