@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Twitch Chat Overlay — Setup</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0d0d14;
+  --surface: #13131f;
+  --border:  #2a2a3e;
+  --accent:  #a970ff;
+  --accent2: #7c4dcc;
+  --text:    #e8e8f0;
+  --muted:   #6b6b8a;
+  --green:   #4dffb0;
+  --red:     #ff6b80;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.logo {
+  width: 40px; height: 40px;
+  background: var(--accent);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.header-text h1 {
+  font-size: 18px; font-weight: 700;
+  color: var(--text);
+}
+.header-text p {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.optional {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+  background: rgba(255,255,255,0.05);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.field input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 9px 12px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+.field input:focus { border-color: var(--accent); }
+.field input::placeholder { color: #3a3a55; }
+
+.field-hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.field-hint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.field-hint a:hover { text-decoration: underline; }
+
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Divider */
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+/* Generate button */
+.gen-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: inherit;
+  padding: 13px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  width: 100%;
+}
+.gen-btn:hover { background: var(--accent2); }
+.gen-btn:active { transform: scale(0.98); }
+
+/* Output */
+#output {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+#output.show { display: flex; }
+
+.out-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--muted);
+}
+
+.url-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 11px 14px;
+  font-size: 12px;
+  color: var(--accent);
+  word-break: break-all;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  line-height: 1.6;
+  cursor: text;
+  user-select: all;
+}
+
+.copy-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+.copy-btn.copied { border-color: var(--green); color: var(--green); }
+
+.instructions {
+  background: rgba(169, 112, 255, 0.06);
+  border: 1px solid rgba(169, 112, 255, 0.2);
+  border-radius: 9px;
+  padding: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.instructions strong { color: var(--text); }
+.instructions ol { padding-left: 18px; }
+.instructions li { margin-bottom: 2px; }
+
+.warn {
+  background: rgba(255, 107, 128, 0.06);
+  border: 1px solid rgba(255, 107, 128, 0.2);
+  border-radius: 9px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: #ff9aaa;
+  line-height: 1.6;
+  display: none;
+}
+.warn.show { display: block; }
+
+/* Footer */
+.footer {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <rect x="3" y="3" width="3" height="11" rx="1.5" fill="white"/>
+        <rect x="9" y="6" width="3" height="8" rx="1.5" fill="white"/>
+        <rect x="15" y="3" width="3" height="11" rx="1.5" fill="white" opacity=".5"/>
+        <path d="M3 16l3-3 3 3 3-3 3 3 3-3" stroke="white" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+      </svg>
+    </div>
+    <div class="header-text">
+      <h1>Twitch Chat Overlay</h1>
+      <p>Generate your personal OBS browser source URL</p>
+    </div>
+  </div>
+
+  <!-- Form -->
+  <div class="card">
+    <div class="card-title">Channel settings</div>
+
+    <div class="field">
+      <label for="channel">Channel name</label>
+      <input id="channel" type="text" placeholder="your_channel_name" autocomplete="off" spellcheck="false"/>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="max">Max messages</label>
+        <input id="max" type="number" value="25" min="5" max="80"/>
+      </div>
+      <div class="field">
+        <label for="fade">Fade after (seconds)</label>
+        <input id="fade" type="number" value="30" min="5" max="300"/>
+      </div>
+    </div>
+
+    <hr class="divider"/>
+    <div class="card-title">Custom sub badges <span class="optional">optional</span></div>
+
+    <div class="field">
+      <label for="client_id">Twitch Client ID <span class="optional">optional</span></label>
+      <input id="client_id" type="text" placeholder="Leave empty for default badges" autocomplete="off" spellcheck="false"/>
+    </div>
+
+    <div class="field">
+      <label for="client_secret">Twitch Client Secret <span class="optional">optional</span></label>
+      <input id="client_secret" type="password" placeholder="Leave empty for default badges" autocomplete="off"/>
+      <div class="field-hint">
+        Register a free app at <a href="https://dev.twitch.tv/console/apps" target="_blank">dev.twitch.tv</a> to get these.
+        Without them, standard badges still show — only custom sub badge art is affected.
+      </div>
+    </div>
+
+    <button class="gen-btn" id="genBtn">Generate OBS URL →</button>
+  </div>
+
+  <!-- Output -->
+  <div id="output">
+    <div class="out-label">Your OBS browser source URL</div>
+    <div class="url-box" id="urlBox"></div>
+    <button class="copy-btn" id="copyBtn">Copy URL</button>
+
+    <div class="warn" id="secretWarn">
+      ⚠️ Your Client ID and Secret are included in this URL. Only use it in OBS — don't share the URL publicly.
+    </div>
+
+    <div class="instructions">
+      <strong>How to add in OBS:</strong>
+      <ol>
+        <li>Add a new <strong>Browser Source</strong></li>
+        <li>Uncheck <strong>"Local file"</strong></li>
+        <li>Paste the URL above into the URL field</li>
+        <li>Set width/height to your liking (e.g. 400 × 700)</li>
+        <li>Check <strong>"Allow transparency"</strong></li>
+        <li>Click OK — done!</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/toni19944/obs-twitch-chat-overlay" target="_blank">View on GitHub</a>
+  </div>
+
+</div>
+<script>
+var BASE_URL = window.location.origin + window.location.pathname.replace('index.html', '') + 'twitch-chat-overlay.html';
+
+document.getElementById('genBtn').addEventListener('click', function() {
+  var channel = document.getElementById('channel').value.trim().toLowerCase();
+  if (!channel) {
+    document.getElementById('channel').focus();
+    document.getElementById('channel').style.borderColor = '#ff6b80';
+    setTimeout(function() { document.getElementById('channel').style.borderColor = ''; }, 2000);
+    return;
+  }
+
+  var max       = document.getElementById('max').value || '25';
+  var fade      = (parseInt(document.getElementById('fade').value, 10) || 30) * 1000;
+  var clientId  = document.getElementById('client_id').value.trim();
+  var clientSec = document.getElementById('client_secret').value.trim();
+
+  var params = new URLSearchParams();
+  params.set('channel', channel);
+  if (max !== '25')     params.set('max', max);
+  if (fade !== 30000)   params.set('fade', fade);
+  if (clientId)         params.set('client_id', clientId);
+  if (clientSec)        params.set('client_secret', clientSec);
+
+  var url = BASE_URL + '?' + params.toString();
+
+  document.getElementById('urlBox').textContent = url;
+  document.getElementById('output').classList.add('show');
+
+  // Show warning if credentials are included
+  var warn = document.getElementById('secretWarn');
+  if (clientId || clientSec) warn.classList.add('show');
+  else warn.classList.remove('show');
+
+  // Scroll to output
+  document.getElementById('output').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+document.getElementById('copyBtn').addEventListener('click', function() {
+  var url = document.getElementById('urlBox').textContent;
+  navigator.clipboard.writeText(url).then(function() {
+    var btn = document.getElementById('copyBtn');
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(function() {
+      btn.textContent = 'Copy URL';
+      btn.classList.remove('copied');
+    }, 2000);
+  });
+});
+
+// Enter key on channel input triggers generate
+document.getElementById('channel').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('genBtn').click();
+});
+</script>
+</body>
+</html>
