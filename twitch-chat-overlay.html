@@ -37,11 +37,8 @@ html, body {
   background: rgba(0, 0, 0, 0.22);
   border-radius: 6px;
   padding: 4px 8px;
-  transition: opacity 1.5s ease,
-              max-height 0.6s ease 1.4s,
-              padding 0.6s ease 1.4s,
-              margin 0.6s ease 1.4s;
-  max-height: 200px;
+  /* (#1) Opacity-only transition — no layout-thrashing max-height/padding/margin */
+  transition: opacity 1.5s ease;
   animation: fadeIn 0.2s ease;
 }
 @keyframes fadeIn {
@@ -50,10 +47,6 @@ html, body {
 }
 .msg.dying {
   opacity: 0 !important;
-  max-height: 0 !important;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
-  margin: 0 !important;
   pointer-events: none;
 }
 .badges {
@@ -68,15 +61,13 @@ html, body {
   width: 18px;
   height: 18px;
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
+  /* (#2) Removed filter: drop-shadow — background provides contrast */
 }
 .username {
   font-weight: 700;
   flex-shrink: 0;
-  text-shadow:
-    0 0 6px rgba(0,0,0,0.95),
-    0 1px 4px rgba(0,0,0,1),
-    1px 1px 0 rgba(0,0,0,0.85);
+  /* (#3) Single text-shadow for readability */
+  text-shadow: 0 1px 3px rgba(0,0,0,1);
 }
 .colon {
   color: rgba(255,255,255,0.45);
@@ -86,10 +77,8 @@ html, body {
 .body {
   display: inline;
   color: #f0f0f0;
-  text-shadow:
-    0 0 5px rgba(0,0,0,0.95),
-    0 1px 4px rgba(0,0,0,1),
-    1px 1px 0 rgba(0,0,0,0.85);
+  /* (#3) Single text-shadow for readability */
+  text-shadow: 0 1px 3px rgba(0,0,0,1);
 }
 .emote-img {
   display: inline-block;
@@ -99,7 +88,7 @@ html, body {
   margin: 0 1px;
   position: relative;
   top: -1px;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+  /* (#2) Removed filter: drop-shadow — background provides contrast */
 }
 .sysmsg {
   font-size: 12px;
@@ -108,18 +97,11 @@ html, body {
   padding: 3px 8px;
   text-shadow: 0 1px 4px rgba(0,0,0,1);
   animation: fadeIn 0.2s ease;
-  transition: opacity 1.5s ease,
-              max-height 0.6s ease 1.4s,
-              padding 0.6s ease 1.4s,
-              margin 0.6s ease 1.4s;
-  max-height: 200px;
+  /* (#1) Opacity-only transition */
+  transition: opacity 1.5s ease;
 }
 .sysmsg.dying {
   opacity: 0 !important;
-  max-height: 0 !important;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
-  margin: 0 !important;
   pointer-events: none;
 }
 
@@ -176,16 +158,22 @@ if (!CHANNEL) {
     return BADGE_FALLBACKS[setName] || null;
   }
 
+  // (#7) Debounced badge refresh — collapses rapid calls into one DOM scan
+  var badgeRefreshTimer = null;
   function refreshBadgesInDom() {
-    var imgs = feed.querySelectorAll('img.badge-img');
-    for (var i = 0; i < imgs.length; i++) {
-      var img     = imgs[i];
-      var setName = img.getAttribute('data-set');
-      var version = img.getAttribute('data-version');
-      if (!setName) continue;
-      var url = getBadgeUrl(setName, version);
-      if (url && img.src !== url) img.src = url;
-    }
+    if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
+    badgeRefreshTimer = setTimeout(function() {
+      badgeRefreshTimer = null;
+      var imgs = feed.querySelectorAll('img.badge-img');
+      for (var i = 0; i < imgs.length; i++) {
+        var img     = imgs[i];
+        var setName = img.getAttribute('data-set');
+        var version = img.getAttribute('data-version');
+        if (!setName) continue;
+        var url = getBadgeUrl(setName, version);
+        if (url && img.src !== url) img.src = url;
+      }
+    }, 200);
   }
 
   // ── Data loading ──────────────────────────────────────────────────────
@@ -421,31 +409,57 @@ if (!CHANNEL) {
     return arr;
   }
 
+  // (#6) Fast check — does the string contain surrogate pairs?
+  function hasSurrogates(str) {
+    for (var i = 0; i < str.length; i++) {
+      if (str.charCodeAt(i) >= 0xD800) return true;
+    }
+    return false;
+  }
+
   function buildBody(text, emoteTag) {
     var frag   = document.createDocumentFragment();
     var twitch = parseTwitchEmotes(emoteTag);
-    var chars  = toCodepoints(text);
+
+    // (#6) Skip codepoint array for pure BMP text (vast majority of messages)
+    var needsCp = hasSurrogates(text);
+    var chars   = needsCp ? toCodepoints(text) : null;
+    var len     = needsCp ? chars.length : text.length;
+
     var cursor = 0;
     for (var e = 0; e < twitch.length; e++) {
       var em = twitch[e];
-      if (em.start > cursor) appendThirdParty(frag, chars.slice(cursor, em.start).join(''));
-      appendEmote(frag, getEmoteUrl(em.id), chars.slice(em.start, em.end + 1).join(''));
+      if (em.start > cursor) {
+        var seg = needsCp ? chars.slice(cursor, em.start).join('') : text.substring(cursor, em.start);
+        appendThirdParty(frag, seg);
+      }
+      var emoteName = needsCp ? chars.slice(em.start, em.end + 1).join('') : text.substring(em.start, em.end + 1);
+      appendEmote(frag, getEmoteUrl(em.id), emoteName);
       cursor = em.end + 1;
     }
-    if (cursor < chars.length) appendThirdParty(frag, chars.slice(cursor).join(''));
+    if (cursor < len) {
+      var tail = needsCp ? chars.slice(cursor).join('') : text.substring(cursor);
+      appendThirdParty(frag, tail);
+    }
     return frag;
   }
 
+  // (#5) Batch consecutive non-emote words into a single text node
   function appendThirdParty(frag, text) {
     var words = text.split(' ');
+    var buf   = '';
     for (var i = 0; i < words.length; i++) {
-      if (i > 0) frag.appendChild(document.createTextNode(' '));
+      if (i > 0) buf += ' ';
       var word = words[i];
       if (!word) continue;
-      var url = thirdPartyEmotes[word];
-      if (url) appendEmote(frag, url, word);
-      else frag.appendChild(document.createTextNode(word));
+      if (thirdPartyEmotes[word]) {
+        if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; }
+        appendEmote(frag, thirdPartyEmotes[word], word);
+      } else {
+        buf += word;
+      }
     }
+    if (buf) frag.appendChild(document.createTextNode(buf));
   }
 
   function appendEmote(frag, url, name) {
@@ -460,10 +474,15 @@ if (!CHANNEL) {
   }
 
   // ── Rendering ─────────────────────────────────────────────────────────
+  // (#1) Opacity-only fade, then remove — no layout transitions
+  // (#4) Store timeout ID so trim() can clear it
   function scheduleFade(el) {
-    setTimeout(function() {
+    el._fadeTimer = setTimeout(function() {
       el.classList.add('dying');
-      setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 2700);
+      // Remove after opacity transition completes (1.5s + 100ms buffer)
+      el._fadeTimer = setTimeout(function() {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 1600);
     }, FADE_AFTER);
   }
 
@@ -518,8 +537,13 @@ if (!CHANNEL) {
     scheduleFade(div);
   }
 
+  // (#4) Clear pending fade timers on trimmed elements
   function trim() {
-    while (feed.children.length > MAX_MSGS) feed.removeChild(feed.firstChild);
+    while (feed.children.length > MAX_MSGS) {
+      var el = feed.firstChild;
+      if (el._fadeTimer) clearTimeout(el._fadeTimer);
+      feed.removeChild(el);
+    }
   }
 
   function parseBadges(raw) {
